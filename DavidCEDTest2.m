@@ -1,96 +1,81 @@
 clear;
-saveloc = 'Z:\Dayvihd\spike2_files\BigHold';
-if ~exist(saveloc, 'dir')
-    error('Save location does not exist!');
+saveloc = 'Z:\BigHold';
+if ~exist(saveloc,'dir')
+    disp('saveloc doesn''t exist')
+    error('who raised you?')
 end
 
-cedpath = getenv('CEDS64ML'); % Get the CEDS64 environment path
-addpath(cedpath); % Add library functions to the path
-CEDS64LoadLib(cedpath); % Load libraries
+if isempty(getenv('CEDS64ML'))
+    setenv('CEDS64ML', 'C:\CEDMATLAB\CEDS64ML');
+end
+cedpath = getenv('CEDS64ML'); %grabs the CEDS64 environment
+addpath(cedpath); %adds the library functions to the path
+CEDS64LoadLib(cedpath); % Loads in libraries... I think...
 
-% Filepath setup
-filepath = 'Z:\Dayvihd\spike2_files\SingleHold\A471 SCN April 7 (converted).smrx';
-if ~exist(filepath, 'file')
-    error('SMRX file does not exist!');
+% Checking if this file is legit
+%filepath = 'Z:\Dayvihd\spike2 files\400 untemplated.smrx';
+% A1916400, mei 23X- fixed.smrx was already converted
+basePath = 'Y:\Dayvihd\spike2_files\SingleHold\';
+smrxName = 'A471 SCN April 7 (converted)';
+filepath = [basePath, smrxName, '.smrx'];
+if ~exist(filepath,'file') 
+    error('This shit doesnt exist, homie');
 end
 
-% Open the file
-fhand1 = CEDS64Open(filepath);
-if fhand1 < 0
-    error('Failed to load SMRX file!');
+
+% Opens up the file
+fhand1 = CEDS64Open([filepath]);
+if fhand1 < 0 
+    disp('couldnt load in the goddamn smrx or smr file')
+    error('fuck');
 end
 
-% Metadata
-maxChannels1 = CEDS64MaxChan(fhand1); % Get the number of channels
-channelsToProcess = 1:maxChannels1; % Adjust based on desired channels
-maxTimeTicks1 = CEDS64ChanMaxTime(fhand1, channelsToProcess(1)) + 1; % Max time in ticks
-maxTimeSecs1 = CEDS64TicksToSecs(fhand1, maxTimeTicks1); % Convert max tick time to seconds
+% Let's load in some metadata now, yeah?
+maxChannels1 = CEDS64MaxChan(fhand1); %Get the number of channels this file supports
+channelswelookinat = 1:maxChannels1;
+maxTimeTicks1 = CEDS64ChanMaxTime(fhand1, channelswelookinat(1) )+1; %gets max time in ticks (assumes that all channels are same rec length)
+maxTimeSecs1 = CEDS64TicksToSecs(fhand1,maxTimeTicks1); %Converts max tick time to seconds
+maxChannels1 = CEDS64MaxChan(fhand1); %Get the number of channels this file supports
+[~, startTime1] = CEDS64TimeDate(fhand1); % Gets the time the recording starts
 
-% Processing parameters
-chunkSize = 1e8; % Adjust chunk size (samples per chunk)
-timeStep = CEDS64ChanDiv(fhand1, channelsToProcess(1)); % Sampling interval in ticks
-chunkTicks = chunkSize * timeStep; % Ticks per chunk
+%Now let's load in actual waveforms
+cd(saveloc)
+if ~exist(saveloc,'dir')
+    disp('saveloc doesn''t exist')
+    error('who raised you?')
+end
 
-% Loop through each channel
-for chanIdx = channelsToProcess
-    fprintf('Processing channel %d...\n', chanIdx);
-    matfileName = fullfile(saveloc, sprintf('waveform_channel_%d.mat', chanIdx));
-    matObj = matfile(matfileName, 'Writable', true);
-    matObj.fVals = []; % Preallocate storage for waveform data
-    matObj.times = []; % Preallocate storage for timestamps
+datFileNames = cell(length(channelswelookinat), 1);
+datNumChans = zeros(length(channelswelookinat), 1);
+
+%Now let's load in actual waveforms
+cd(saveloc)
+for i = 1:length(channelswelookinat)
+    [iRead, fVals, i64Time] = CEDS64ReadWaveF( fhand1, i, maxTimeTicks1, 0, maxTimeTicks1 );
+    fVals = fVals * 10.^6;
     
-    % Initialize reading parameters
-    currentTick = 0;
-    allData = []; % Accumulator for data in current channel
-    allTimes = []; % Accumulator for time stamps
-    
-    while currentTick < maxTimeTicks1
-        % Define chunk range
-        nextTick = min(currentTick + chunkTicks, maxTimeTicks1);
-        
-        % Read chunk
-        [nRead, fVals, startTime] = CEDS64ReadWaveF(fhand1, chanIdx, chunkSize, currentTick, nextTick);
-        if nRead <= 0
-            fprintf('No more data to read for channel %d. Stopping.\n', chanIdx);
-            break;
-        end
-        
-        % Generate timestamps for this chunk
-        chunkTimes = double(startTime) + (0:nRead-1)' * double(timeStep);
-        
-        % Detect gaps and fill with NaN
-        if ~isempty(allTimes) && ~isempty(chunkTimes)
-            gapSize = chunkTimes(1) - allTimes(end) - timeStep;
-            if gapSize > 0
-                fprintf('Gap detected in channel %d. Filling with NaN...\n', chanIdx);
-                nGapPoints = round(gapSize / timeStep);
-                gapTimes = (allTimes(end) + timeStep):timeStep:(chunkTimes(1) - timeStep);
-                gapData = NaN(nGapPoints, 1);
-                allTimes = [allTimes; gapTimes']; %#ok<AGROW>
-                allData = [allData; gapData]; %#ok<AGROW>
-            end
-        end
-        
-        % Append current chunk data
-        allTimes = [allTimes; chunkTimes]; %#ok<AGROW>
-        allData = [allData; fVals]; %#ok<AGROW>
-        
-        % Write accumulated data to the mat file
-        matObj.fVals = [matObj.fVals; allData];
-        matObj.times = [matObj.times; allTimes];
-        
-        % Clear accumulators
-        allData = [];
-        allTimes = [];
-        
-        % Update tick
-        currentTick = nextTick;
+    %save dat file for this channel
+    datFileName = fullfile(saveloc, ['waveform', chardex(i), '_', num2str(i), '.dat']);
+    fileID = fopen(datFileName, 'w');
+    fwrite(fileID, fVals, 'int16');
+    fclose(fileID);
+
+    %save dat path and # of channels
+    datFileNames{i} = datFileName;
+    datNumChans(i) = 1;
+end
+
+mergeFileName = fullfile(saveloc, [smrxName, '.dat']);
+MergeDats(datFileNames, mergeFileName, datNumChans);
+
+
+% This is a function that ensures that with alphabetizing, all the channels
+% will retain their positions
+function [charizard] = chardex(integer)
+    if integer <= 26
+        charizard = char('a' + integer - 1);
+    else 
+        charizard = ['z',chardex(integer-26)];
     end
-    
-    fprintf('Finished processing channel %d. Data saved to %s.\n', chanIdx, matfileName);
 end
 
-% Cleanup
-CEDS64Close(fhand1);
-CEDS64UnloadLib();
-fprintf('All channels processed.\n');
